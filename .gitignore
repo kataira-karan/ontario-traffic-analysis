@@ -1,0 +1,38 @@
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated traffic data
+data/raw/
+data/processed/
+data/Processed/
+data/cleaned/
+*.csv
+*.json
+
+# Logs / temporary files
+*.log
+*.tmp
+
+# Power BI local file (publish screenshots separately)
+*.pbix
