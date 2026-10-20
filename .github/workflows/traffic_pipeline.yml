@@ -4,17 +4,12 @@ on:
   workflow_dispatch:
   schedule:
     # GitHub Actions cron uses UTC. These two entries keep the run at
-    # 9 AM Toronto time across daylight-saving changes. The job-level
-    # condition below selects the correct UTC schedule for EST vs EDT.
+    # 9 AM Toronto time across daylight-saving changes.
     - cron: "0 13 * * *"
     - cron: "0 14 * * *"
 
 jobs:
   run-traffic-pipeline:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.schedule == '0 13 * * *' && format('{0:MM}', github.event.repository.updated_at) != '00') ||
-      github.event_name == 'schedule'
     runs-on: ubuntu-latest
 
     steps:
@@ -69,3 +64,14 @@ jobs:
           SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
           SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
         run: python src/load_traffic_to_snowflake.py
+
+      - name: Merge staging into production
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
+          SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
+        run: python src/merge_traffic.py
