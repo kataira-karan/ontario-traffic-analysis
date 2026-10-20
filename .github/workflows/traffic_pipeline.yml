@@ -3,10 +3,10 @@ name: Ontario Traffic Pipeline
 on:
   workflow_dispatch:
   schedule:
-    # GitHub Actions cron uses UTC. These two entries keep the run at
-    # 9 AM Toronto time across daylight-saving changes.
-    - cron: "0 13 * * *"
-    - cron: "0 14 * * *"
+    # GitHub Actions cron uses UTC.
+    # 12 PM Toronto = 16:00 UTC during EDT and 17:00 UTC during EST.
+    - cron: "0 16 * * *"
+    - cron: "0 17 * * *"
 
 jobs:
   run-traffic-pipeline:
@@ -21,41 +21,39 @@ jobs:
           echo "hour=$HOUR" >> "$GITHUB_OUTPUT"
           echo "Toronto local hour: $HOUR"
 
-      - name: Stop duplicate DST schedule
-        if: github.event_name == 'schedule' && steps.toronto-time.outputs.hour != '09'
-        run: |
-          echo "Skipping this UTC schedule because it is not 9 AM in Toronto."
-          exit 0
+      - name: Skip non-noon DST schedule
+        if: github.event_name == 'schedule' && steps.toronto-time.outputs.hour != '12'
+        run: echo "Skipping this UTC schedule because it is not 12 PM in Toronto."
 
       - name: Checkout repository
-        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
         uses: actions/checkout@v4
 
       - name: Set up Python
-        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
-        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Download Ontario 511 traffic data
-        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
         env:
           ONTARIO_511_API_KEY: ${{ secrets.ONTARIO_511_API_KEY }}
         run: python src/download_traffic.py
 
       - name: Clean traffic data
-        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
         run: python src/clean_traffic.py
 
       - name: Load traffic data to Snowflake staging
-        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
         env:
           SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
           SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
@@ -66,7 +64,7 @@ jobs:
         run: python src/load_traffic_to_snowflake.py
 
       - name: Merge staging into production
-        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
         env:
           SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
           SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
