@@ -1,0 +1,41 @@
+name: Ontario Traffic Pipeline
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-traffic-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download Ontario 511 traffic data
+        env:
+          ONTARIO_511_API_KEY: ${{ secrets.ONTARIO_511_API_KEY }}
+        run: python src/download_traffic.py
+
+      - name: Clean traffic data
+        run: python src/clean_traffic.py
+
+      - name: Load traffic data to Snowflake staging
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
+          SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
+        run: python src/load_traffic_to_snowflake.py
