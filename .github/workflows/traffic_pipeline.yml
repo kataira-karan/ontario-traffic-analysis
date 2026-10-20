@@ -2,35 +2,65 @@ name: Ontario Traffic Pipeline
 
 on:
   workflow_dispatch:
+  schedule:
+    # GitHub Actions cron uses UTC. These two entries keep the run at
+    # 9 AM Toronto time across daylight-saving changes. The job-level
+    # condition below selects the correct UTC schedule for EST vs EDT.
+    - cron: "0 13 * * *"
+    - cron: "0 14 * * *"
 
 jobs:
   run-traffic-pipeline:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.schedule == '0 13 * * *' && format('{0:MM}', github.event.repository.updated_at) != '00') ||
+      github.event_name == 'schedule'
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check Toronto local time for scheduled runs
+        if: github.event_name == 'schedule'
+        id: toronto-time
+        run: |
+          HOUR=$(TZ=America/Toronto date +%H)
+          echo "hour=$HOUR" >> "$GITHUB_OUTPUT"
+          echo "Toronto local hour: $HOUR"
+
+      - name: Stop duplicate DST schedule
+        if: github.event_name == 'schedule' && steps.toronto-time.outputs.hour != '09'
+        run: |
+          echo "Skipping this UTC schedule because it is not 9 AM in Toronto."
+          exit 0
+
       - name: Checkout repository
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Download Ontario 511 traffic data
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
         env:
           ONTARIO_511_API_KEY: ${{ secrets.ONTARIO_511_API_KEY }}
         run: python src/download_traffic.py
 
       - name: Clean traffic data
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
         run: python src/clean_traffic.py
 
       - name: Load traffic data to Snowflake staging
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '09'
         env:
           SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
           SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
