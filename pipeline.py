@@ -17,7 +17,7 @@ MASTER_COLUMNS = ["EVENT_ID", "ROADWAY_NAME", "DIRECTION_OF_TRAVEL", "DESCRIPTIO
 
 def fetch_events():
     print("Fetching latest Ontario 511 data...")
-    response = requests.get(API_URL, params={"key": os.environ["ONTARIO_511_API_KEY"], "format": "json"}, timeout=60)
+    response = requests.get(API_URL, params={"key":os.getenv("ONTARIO_511_API_KEY"), "format": "json"}, timeout=60)
     response.raise_for_status()
     data = response.json()
     if not isinstance(data, list):
@@ -78,25 +78,162 @@ def build_merge_sql():
         VALUES ({insert_values})
     """
 
+from pathlib import Path
+
+
+def run_validation(conn):
+
+    print("\nRunning validation queries...")
+
+    base_dir = Path(__file__).resolve().parent
+    print(f"Base directory: {base_dir}")
+    # If file is beside pipeline.py:
+    validation_file = base_dir / "sql" / "validation_queries.sql"
+
+    # If it's inside sql/ instead, use:
+    # validation_file = base_dir / "sql" / "validation_queries.sql"
+
+    if not validation_file.exists():
+        raise FileNotFoundError(
+            f"Validation SQL file not found: {validation_file}"
+        )
+
+    validation_sql = validation_file.read_text(
+        encoding="utf-8"
+    )
+
+    # Run all statements in validation_queries.sql
+    conn.execute_string(validation_sql)
+
+    print("Validation SQL executed.")
+
+    cursor = conn.cursor()
+
+    try:
+
+        cursor.execute("""
+            SELECT
+                RUN_ID,
+                RUN_TIMESTAMP,
+                STAGGING_ROW_COUNT,
+                NULL_COUNT,
+                DUPLICATE_EVENT_COUNT,
+                NEW_EVENT_COUNT,
+                CLOSED_EVENT_COUNT,
+                IS_VALID
+            FROM PUBLIC.PIPELINE_VALIDATION
+            ORDER BY RUN_TIMESTAMP DESC
+            LIMIT 1
+        """)
+
+        result = cursor.fetchone()
+
+        if result is None:
+            raise RuntimeError(
+                "No validation record was created."
+            )
+
+        (
+            run_id,
+            run_timestamp,
+            row_count,
+            null_count,
+            duplicate_count,
+            new_events,
+            closed_events,
+            is_valid
+        ) = result
+
+        print("\n--- VALIDATION REPORT ---")
+        print(f"Run ID:          {run_id}")
+        print(f"Staging rows:    {row_count}")
+        print(f"Null IDs:        {null_count}")
+        print(f"Duplicate IDs:   {duplicate_count}")
+        print(f"New events:      {new_events}")
+        print(f"Closed events:   {closed_events}")
+        print(f"Valid:           {is_valid}")
+        print("-------------------------")
+
+        return is_valid
+
+    finally:
+        cursor.close()
 
 def load_to_snowflake(df):
+
     print("Connecting to Snowflake...")
-    conn = snowflake.connector.connect(account=os.environ["SNOWFLAKE_ACCOUNT"], user=os.environ["SNOWFLAKE_USER"], password=os.environ["SNOWFLAKE_PASSWORD"], warehouse=os.environ["SNOWFLAKE_WAREHOUSE"], database=os.environ["SNOWFLAKE_DATABASE"], schema=os.environ["SNOWFLAKE_SCHEMA"])
+
+    conn = snowflake.connector.connect(
+        account=os.getenv("SNOWFLAKE_ACCOUNT"),
+        user=os.getenv("SNOWFLAKE_USER"),
+        password=os.getenv("SNOWFLAKE_PASSWORD"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+        database=os.getenv("SNOWFLAKE_DATABASE"),
+        schema=os.getenv("SNOWFLAKE_SCHEMA")
+    )
+
     try:
-        success, chunks, rows, output = write_pandas(conn, df, table_name="TRAFFIC_EVENTS_STAGING", schema="PUBLIC", overwrite=True, auto_create_table=False, quote_identifiers=False)
+        # 1. Upload staging
+        success, chunks, rows, output = write_pandas(
+            conn,
+            df,
+            table_name="TRAFFIC_EVENTS_STAGING",
+            schema="PUBLIC",
+            overwrite=True,
+            auto_create_table=False,
+            quote_identifiers=False,
+            use_logical_type=True
+        )
+
         if not success or rows != len(df):
-            raise RuntimeError("Staging upload incomplete")
+            raise RuntimeError(
+                "Staging upload incomplete"
+            )
+
         print(f"Staging upload complete: {rows} rows")
+
+
+        # 2. Run validation_queries.sql
+        is_valid = run_validation(conn)
+
+
+        # 3. Quality gate
+        if not is_valid:
+            raise RuntimeError(
+                "Validation FAILED. MERGE cancelled."
+            )
+
+
+        # 4. Validation passed
+        print("Validation PASSED.")
+        print("Starting MERGE...")
+
+
+        # 5. Run merge
         cursor = conn.cursor()
+
         try:
-            cursor.execute("""SELECT COUNT(*) FROM PUBLIC.TRAFFIC_EVENTS_STAGING s WHERE NOT EXISTS (SELECT 1 FROM PUBLIC.TRAFFIC_EVENTS t WHERE t.EVENT_ID = s.EVENT_ID)""")
-            print(f"New event IDs: {cursor.fetchone()[0]}")
+
             cursor.execute(build_merge_sql())
-            print("MERGE result:", cursor.fetchone())
-            cursor.execute("SELECT COUNT(*) FROM PUBLIC.TRAFFIC_EVENTS")
-            print("Master table total:", cursor.fetchone()[0])
+
+            merge_result = cursor.fetchone()
+
+            print("MERGE result:", merge_result)
+
+            cursor.execute("""
+                SELECT COUNT(*)
+                FROM PUBLIC.TRAFFIC_EVENTS
+            """)
+
+            print(
+                "Master table total:",
+                cursor.fetchone()[0]
+            )
+
         finally:
             cursor.close()
+
+
     finally:
         conn.close()
 

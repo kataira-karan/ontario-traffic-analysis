@@ -1,54 +1,90 @@
--- Ontario Traffic Analysis - Snowflake data-quality validation
-
--- 1. Current staging row count
-SELECT COUNT(*) AS staging_row_count
-FROM PUBLIC.TRAFFIC_EVENTS_STAGING;
-
--- 2. Master table row count
-SELECT COUNT(*) AS master_row_count
-FROM PUBLIC.TRAFFIC_EVENTS;
-
--- 3. Null event IDs: expected result = 0
-SELECT COUNT(*) AS null_event_ids
-FROM PUBLIC.TRAFFIC_EVENTS_STAGING
-WHERE EVENT_ID IS NULL;
-
--- 4. Duplicate event IDs: expected result = no rows
-SELECT EVENT_ID, COUNT(*) AS duplicate_count
-FROM PUBLIC.TRAFFIC_EVENTS_STAGING
-GROUP BY EVENT_ID
-HAVING COUNT(*) > 1;
-
--- 5. New events in the latest staging snapshot
-SELECT COUNT(*) AS new_events
-FROM PUBLIC.TRAFFIC_EVENTS_STAGING s
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM PUBLIC.TRAFFIC_EVENTS t
-    WHERE t.EVENT_ID = s.EVENT_ID
-);
-
--- 6. Events in master that disappeared from the latest snapshot
-SELECT COUNT(*) AS disappeared_events
-FROM PUBLIC.TRAFFIC_EVENTS t
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM PUBLIC.TRAFFIC_EVENTS_STAGING s
-    WHERE s.EVENT_ID = t.EVENT_ID
-);
-
--- 7. Inspect disappeared events
-SELECT t.*
-FROM PUBLIC.TRAFFIC_EVENTS t
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM PUBLIC.TRAFFIC_EVENTS_STAGING s
-    WHERE s.EVENT_ID = t.EVENT_ID
+INSERT INTO ONTARIO_TRAFFIC.PUBLIC.PIPELINE_VALIDATION
+(
+    RUN_ID,
+    RUN_TIMESTAMP,
+    STAGGING_ROW_COUNT,
+    NULL_COUNT,
+    DUPLICATE_EVENT_COUNT,
+    NEW_EVENT_COUNT,
+    CLOSED_EVENT_COUNT,
+    IS_VALID
 )
-ORDER BY t.LAST_UPDATED DESC;
 
--- 8. Active vs inactive event counts (run after IS_ACTIVE is available)
-SELECT IS_ACTIVE, COUNT(*) AS event_count
-FROM PUBLIC.TRAFFIC_EVENTS
-GROUP BY IS_ACTIVE
-ORDER BY IS_ACTIVE DESC;
+WITH VALIDATION_METRICS AS
+(
+    SELECT
+
+        /* Total staging rows */
+        (
+            SELECT COUNT(*)
+            FROM ONTARIO_TRAFFIC.PUBLIC.TRAFFIC_EVENTS_STAGING
+        ) AS ROW_COUNT,
+
+
+        /* NULL EVENT_IDs */
+        (
+            SELECT COUNT(*)
+            FROM ONTARIO_TRAFFIC.PUBLIC.TRAFFIC_EVENTS_STAGING
+            WHERE EVENT_ID IS NULL
+        ) AS NULL_COUNT,
+
+
+        /* Number of duplicated EVENT_IDs */
+        (
+            SELECT COUNT(*)
+            FROM
+            (
+                SELECT EVENT_ID
+                FROM ONTARIO_TRAFFIC.PUBLIC.TRAFFIC_EVENTS_STAGING
+                WHERE EVENT_ID IS NOT NULL
+                GROUP BY EVENT_ID
+                HAVING COUNT(*) > 1
+            )
+        ) AS DUPLICATE_COUNT,
+
+
+        /* New events */
+        (
+            SELECT COUNT(*)
+            FROM ONTARIO_TRAFFIC.PUBLIC.TRAFFIC_EVENTS_STAGING ST
+            WHERE NOT EXISTS
+            (
+                SELECT 1
+                FROM ONTARIO_TRAFFIC.PUBLIC.TRAFFIC_EVENTS T
+                WHERE T.EVENT_ID = ST.EVENT_ID
+            )
+        ) AS NEW_EVENTS,
+
+
+        /* Currently active events missing from staging */
+        (
+            SELECT COUNT(*)
+            FROM ONTARIO_TRAFFIC.PUBLIC.TRAFFIC_EVENTS T
+            WHERE T.IS_ACTIVE = TRUE
+              AND NOT EXISTS
+              (
+                  SELECT 1
+                  FROM ONTARIO_TRAFFIC.PUBLIC.TRAFFIC_EVENTS_STAGING ST
+                  WHERE ST.EVENT_ID = T.EVENT_ID
+              )
+        ) AS CLOSED_EVENTS
+)
+
+SELECT
+    UUID_STRING(),
+    CURRENT_TIMESTAMP(),
+    ROW_COUNT,
+    NULL_COUNT,
+    DUPLICATE_COUNT,
+    NEW_EVENTS,
+    CLOSED_EVENTS,
+
+    CASE
+        WHEN ROW_COUNT > 0
+         AND NULL_COUNT = 0
+         AND DUPLICATE_COUNT = 0
+        THEN TRUE
+        ELSE FALSE
+    END
+
+FROM VALIDATION_METRICS;

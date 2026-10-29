@@ -9,7 +9,7 @@ load_dotenv()
 api_key = os.getenv("ONTARIO_511_API_KEY")
 if not api_key:
     raise ValueError("API key missing from .env file")
-
+ 
 url = "https://511on.ca/api/v2/get/event"
 response = requests.get(url, params={"key": api_key, "format": "json"}, timeout=60)
 response.raise_for_status()

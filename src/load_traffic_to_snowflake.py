@@ -35,6 +35,7 @@ try:
         auto_create_table=False,
         overwrite=True,
         quote_identifiers=False,
+        use_logical_type=True
     )
     print("Upload successful:", success)
     print("Rows uploaded:", num_rows)
