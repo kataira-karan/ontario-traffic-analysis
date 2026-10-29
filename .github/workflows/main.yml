@@ -1,0 +1,92 @@
+name: Ontario Traffic Pipeline
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # GitHub Actions cron uses UTC.
+    # 12 PM Toronto = 16:00 UTC during EDT
+    # 12 PM Toronto = 17:00 UTC during EST
+    - cron: "0 16 * * *"
+    - cron: "0 17 * * *"
+
+jobs:
+  run-traffic-pipeline:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ---------------------------------------------
+      # Check Toronto time
+      # ---------------------------------------------
+
+      - name: Check Toronto local time
+        if: github.event_name == 'schedule'
+        id: toronto-time
+        run: |
+          HOUR=$(TZ=America/Toronto date +%H)
+          echo "hour=$HOUR" >> "$GITHUB_OUTPUT"
+          echo "Toronto local hour: $HOUR"
+
+
+      # ---------------------------------------------
+      # Skip incorrect DST schedule
+      # ---------------------------------------------
+
+      - name: Skip non-noon DST schedule
+        if: github.event_name == 'schedule' && steps.toronto-time.outputs.hour != '12'
+        run: |
+          echo "Skipping because it is not 12 PM in Toronto."
+
+
+      # ---------------------------------------------
+      # Checkout repository
+      # ---------------------------------------------
+
+      - name: Checkout repository
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
+        uses: actions/checkout@v4
+
+
+      # ---------------------------------------------
+      # Python
+      # ---------------------------------------------
+
+      - name: Set up Python
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+
+      # ---------------------------------------------
+      # Dependencies
+      # ---------------------------------------------
+
+      - name: Install dependencies
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+
+      # ---------------------------------------------
+      # Run complete pipeline
+      # ---------------------------------------------
+
+      - name: Run Ontario Traffic Pipeline
+        if: github.event_name == 'workflow_dispatch' || steps.toronto-time.outputs.hour == '12'
+
+        env:
+          ONTARIO_511_API_KEY: ${{ secrets.ONTARIO_511_API_KEY }}
+
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
+          SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
+
+        run: python pipeline.py
